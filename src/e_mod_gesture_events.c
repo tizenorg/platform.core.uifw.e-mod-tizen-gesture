@@ -25,10 +25,16 @@ _e_gesture_swipe_cancel(void)
 }
 
 static Eina_Bool
-_e_gesture_is_touch_device(const char *identifier)
+_e_gesture_is_touch_device(Ecore_Device *dev)
 {
    Eina_List *l;
    char *data;
+   const char *identifier;
+
+   EINA_SAFETY_ON_NULL_RETURN_VAL(dev, EINA_FALSE);
+
+   identifier = ecore_device_identifier_get(dev);
+   if (!identifier) return EINA_FALSE;
 
    EINA_LIST_FOREACH(gesture->touch_devices, l, data)
      {
@@ -82,7 +88,7 @@ _e_gesture_process_device_add(void *event)
 {
    Ecore_Event_Device_Info *ev = event;
 
-   if (ev->caps & EVDEV_SEAT_TOUCH)
+   if (ev->clas == ECORE_DEVICE_CLASS_TOUCH)
      {
         gesture->touch_devices = eina_list_append(gesture->touch_devices, ev->identifier);
         GTINF("%s(%s) device is touch device: add list\n", ev->name, ev->identifier);
@@ -97,7 +103,7 @@ _e_gesture_process_device_del(void *event)
    Eina_List *l, *l_next;
    char *data;
 
-   if (ev->caps & EVDEV_SEAT_TOUCH)
+   if (ev->clas == ECORE_DEVICE_CLASS_TOUCH)
      {
         EINA_LIST_FOREACH_SAFE(gesture->touch_devices, l, l_next, data)
           {
@@ -278,7 +284,7 @@ _e_gesture_process_mouse_button_down(void *event)
      {
         return EINA_TRUE;
      }
-   if (_e_gesture_is_touch_device(ev->dev_name) == EINA_FALSE)
+   if (_e_gesture_is_touch_device(ev->dev) == EINA_FALSE)
      {
         return EINA_TRUE;
      }
@@ -321,7 +327,7 @@ _e_gesture_process_mouse_button_up(void *event)
      {
         return EINA_TRUE;
      }
-   if (_e_gesture_is_touch_device(ev->dev_name) == EINA_FALSE)
+   if (_e_gesture_is_touch_device(ev->dev) == EINA_FALSE)
      {
         return EINA_TRUE;
      }
@@ -349,7 +355,7 @@ _e_gesture_process_mouse_move(void *event)
      {
         return EINA_TRUE;
      }
-   if (_e_gesture_is_touch_device(ev->dev_name) == EINA_FALSE)
+   if (_e_gesture_is_touch_device(ev->dev) == EINA_FALSE)
      {
         return EINA_TRUE;
      }
