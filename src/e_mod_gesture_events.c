@@ -24,26 +24,44 @@ _e_gesture_swipe_cancel(void)
    gesture->gesture_filter |= TIZEN_GESTURE_TYPE_SWIPE;
 }
 
-static Eina_Bool
-_e_gesture_is_touch_device(Ecore_Device *dev)
+static void
+_e_gesture_keyevent_free(void *data EINA_UNUSED, void *ev)
 {
-   Eina_List *l;
-   char *data;
-   const char *identifier;
+   Ecore_Event_Key *e = ev;
 
-   EINA_SAFETY_ON_NULL_RETURN_VAL(dev, EINA_FALSE);
+   eina_stringshare_del(e->keyname);
+   eina_stringshare_del(e->key);
+   eina_stringshare_del(e->compose);
 
-   identifier = ecore_device_identifier_get(dev);
-   if (!identifier) return EINA_FALSE;
+   E_FREE(e);
+}
 
-   EINA_LIST_FOREACH(gesture->touch_devices, l, data)
-     {
-        if (!strncmp(data, identifier, strlen(identifier)))
-          {
-             return EINA_TRUE;
-          }
-     }
-   return EINA_FALSE;
+/* Optional: This function is currently used to generate back key.
+ *           But how about change this function to generate every key?
+ *           _e_gesture_send_key(char *keyname, Eina_Bool pressed)
+ */
+static void
+_e_gesture_send_back_key(Eina_Bool pressed)
+{
+   Ecore_Event_Key *ev;
+
+   EINA_SAFETY_ON_NULL_RETURN(e_comp_wl->xkb.keymap);
+
+   ev = E_NEW(Ecore_Event_Key, 1);
+   EINA_SAFETY_ON_NULL_RETURN(ev);
+
+   ev->key = (char *)eina_stringshare_add("XF86Back");
+   ev->keyname = (char *)eina_stringshare_add(ev->key);
+   ev->compose = (char *)eina_stringshare_add(ev->key);
+   ev->timestamp = (int)(ecore_time_get()*1000);
+   ev->same_screen = 1;
+   ev->keycode = E_GESTURE_SWIPE_BACK_KEY;
+   ev->dev = gesture->device.kbd_device;
+
+   if (pressed)
+     ecore_event_add(ECORE_EVENT_KEY_DOWN, ev, _e_gesture_keyevent_free, NULL);
+   else
+     ecore_event_add(ECORE_EVENT_KEY_UP, ev, _e_gesture_keyevent_free, NULL);
 }
 
 static void
@@ -51,6 +69,7 @@ _e_gesture_send_swipe(int fingers, int x, int y, int direction, struct wl_client
 {
    enum tizen_gesture_direction dir = 0;
    Ecore_Event_Mouse_Button *ev_cancel;
+
    switch (direction)
      {
         case E_GESTURE_DIRECTION_DOWN:
@@ -76,46 +95,33 @@ _e_gesture_send_swipe(int fingers, int x, int y, int direction, struct wl_client
    ecore_event_add(ECORE_EVENT_MOUSE_BUTTON_CANCEL, ev_cancel, NULL, NULL);
 
    GTINF("Send swipe gesture (direction: %d) to client: %p\n", dir, client);
+
+   if (E_GESTURE_SWIPE_BACK_DEFAULT_ENABLE &&
+       direction == E_GESTURE_DIRECTION_DOWN)
+     {
+        _e_gesture_send_back_key(EINA_TRUE);
+        _e_gesture_send_back_key(EINA_FALSE);
+        goto finish;
+     }
    
    tizen_gesture_send_swipe(res, fingers, TIZEN_GESTURE_MODE_DONE, x, y, dir);
    _e_gesture_swipe_cancel();
 
+finish:
+   _e_gesture_swipe_cancel();
    gesture->gesture_events.recognized_gesture |= TIZEN_GESTURE_TYPE_SWIPE;
 }
 
 static Eina_Bool
 _e_gesture_process_device_add(void *event)
 {
-   Ecore_Event_Device_Info *ev = event;
-
-   if (ev->clas == ECORE_DEVICE_CLASS_TOUCH)
-     {
-        gesture->touch_devices = eina_list_append(gesture->touch_devices, ev->identifier);
-        GTINF("%s(%s) device is touch device: add list\n", ev->name, ev->identifier);
-     }
-   return EINA_TRUE;
+   return e_gesture_device_add(event);
 }
 
 static Eina_Bool
 _e_gesture_process_device_del(void *event)
 {
-   Ecore_Event_Device_Info *ev = event;
-   Eina_List *l, *l_next;
-   char *data;
-
-   if (ev->clas == ECORE_DEVICE_CLASS_TOUCH)
-     {
-        EINA_LIST_FOREACH_SAFE(gesture->touch_devices, l, l_next, data)
-          {
-             if (!strncmp(data, ev->identifier, strlen(ev->identifier)))
-               {
-                  GTINF("%s(%s) device is touch device: remove list\n", ev->name, ev->identifier);
-                  gesture->touch_devices = eina_list_remove(gesture->touch_devices, data);
-                  E_FREE(data);
-               }
-          }
-     }
-   return EINA_TRUE;
+   return e_gesture_device_del(event);
 }
 
 static Eina_Bool
@@ -284,7 +290,7 @@ _e_gesture_process_mouse_button_down(void *event)
      {
         return EINA_TRUE;
      }
-   if (_e_gesture_is_touch_device(ev->dev) == EINA_FALSE)
+   if (e_gesture_is_touch_device(ev->dev) == EINA_FALSE)
      {
         return EINA_TRUE;
      }
@@ -327,7 +333,7 @@ _e_gesture_process_mouse_button_up(void *event)
      {
         return EINA_TRUE;
      }
-   if (_e_gesture_is_touch_device(ev->dev) == EINA_FALSE)
+   if (e_gesture_is_touch_device(ev->dev) == EINA_FALSE)
      {
         return EINA_TRUE;
      }
@@ -355,7 +361,7 @@ _e_gesture_process_mouse_move(void *event)
      {
         return EINA_TRUE;
      }
-   if (_e_gesture_is_touch_device(ev->dev) == EINA_FALSE)
+   if (e_gesture_is_touch_device(ev->dev) == EINA_FALSE)
      {
         return EINA_TRUE;
      }

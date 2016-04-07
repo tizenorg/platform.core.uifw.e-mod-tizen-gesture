@@ -1,8 +1,8 @@
 #ifndef E_MOD_MAIN_H
 #define E_MOD_MAIN_H
 
-#include <tizen-extension-server-protocol.h>
 #include <e.h>
+#include <tizen-extension-server-protocol.h>
 #include <Ecore_Drm.h>
 
 #define GTERR(msg, ARG...) ERR("[tizen_gesture][%s:%d] "msg, __FUNCTION__, __LINE__, ##ARG)
@@ -13,14 +13,20 @@
 #define E_GESTURE_FINGER_MAX 3
 #define E_GESTURE_TYPE_MAX TIZEN_GESTURE_TYPE_SWIPE+1
 #define E_GESTURE_TYPE_ALL TIZEN_GESTURE_TYPE_SWIPE
+#define E_GESTURE_KEYBOARD_NAME "Gesture Keyboard"
 
 /* FIX ME: Set values in contiguration file, do not use definition */
+#define E_GESTURE_KEYBOARD_DEVICE "Any"
+
 #define E_GESTURE_SWIPE_DONE_TIME 0.5
 #define E_GESTURE_SWIPE_START_TIME 0.01
 #define E_GESTURE_SWIPE_START_AREA 50
 #define E_GESTURE_SWIPE_DIFF_FAIL 100
 #define E_GESTURE_SWIPE_DIFF_SUCCESS 300
+/* FIX ME: Key code will be get from keymap */
 #define E_GESTURE_SWIPE_COMBINE_KEY 124
+#define E_GESTURE_SWIPE_BACK_KEY 166
+#define E_GESTURE_SWIPE_BACK_DEFAULT_ENABLE EINA_TRUE
 
 #define ABS(x) ((x)>0)?(x):-(x)
 
@@ -82,6 +88,7 @@ struct _E_Gesture_Event_Swipe
    E_Gesture_Direction direction;
 
    unsigned int combined_keycode;
+   unsigned int back_keycode;
 
    unsigned int enabled_finger;
    Ecore_Timer *start_timer;
@@ -104,7 +111,14 @@ struct _E_Gesture
    Eina_List *handlers;
    Eina_List *grab_client_list;
 
-   Eina_List *touch_devices;
+   struct
+   {
+      Eina_List *touch_devices;
+      int uinp_fd;
+      char *kbd_identifier;
+      char *kbd_name;
+      Ecore_Device *kbd_device;
+   }device;
 
    unsigned int grabbed_gesture;
    E_Gesture_Event gesture_events;
@@ -121,4 +135,12 @@ E_API int   e_modapi_save(E_Module *m);
 
 Eina_Bool e_gesture_process_events(void *event, int type);
 int e_gesture_type_convert(uint32_t type);
+
+/* Device control */
+void e_gesture_device_shutdown(void);
+Eina_Bool e_gesture_device_add(Ecore_Event_Device_Info *ev);
+Eina_Bool e_gesture_device_del(Ecore_Event_Device_Info *ev);
+Eina_Bool e_gesture_is_touch_device(const Ecore_Device *dev);
+void e_gesture_device_keydev_set(char *option);
+
 #endif
