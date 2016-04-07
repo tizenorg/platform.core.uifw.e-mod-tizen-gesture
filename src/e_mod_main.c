@@ -352,6 +352,16 @@ _e_gesture_init(E_Module *m)
 
    gesture->gesture_filter = E_GESTURE_TYPE_MAX;
 
+   if (E_GESTURE_SWIPE_BACK_DEFAULT_ENABLE)
+     {
+        gesture->grabbed_gesture |= TIZEN_GESTURE_TYPE_SWIPE;
+        gesture->gesture_events.swipes.fingers[1].enabled = EINA_TRUE;
+        gesture->gesture_events.swipes.fingers[1].direction[E_GESTURE_DIRECTION_DOWN].client = (void *)0x1;
+        gesture->gesture_events.swipes.fingers[1].direction[E_GESTURE_DIRECTION_DOWN].res = (void *)0x1;
+     }
+
+   e_gesture_device_keydev_set(E_GESTURE_KEYBOARD_DEVICE);
+
    return m;
 
 err:
@@ -370,6 +380,7 @@ e_modapi_init(E_Module *m)
 E_API int
 e_modapi_shutdown(E_Module *m)
 {
+   e_gesture_device_shutdown();
    return 1;
 }
 
