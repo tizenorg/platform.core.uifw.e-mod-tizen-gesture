@@ -8,7 +8,8 @@ pkg_LTLIBRARIES        = module.la
 module_la_SOURCES      = e_mod_main.c \
                          e_mod_main.h \
                          e_mod_gesture_events.c \
-                         e_mod_gesture_device.c
+                         e_mod_gesture_device.c \
+                         e_mod_gesture_conf.c
 module_la_CFLAGS       = @ENLIGHTENMENT_CFLAGS@ @WAYLAND_CFLAGS@ -DHAVE_WAYLAND_ONLY
 module_la_LDFLAGS      = -module -avoid-version @WAYLAND_LIBS@ @ENLIGHTENMENT_LIBS@
 

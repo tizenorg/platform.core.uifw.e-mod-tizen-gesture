@@ -5,7 +5,7 @@
 E_GesturePtr gesture = NULL;
 E_API E_Module_Api e_modapi = { E_MODULE_API_VERSION, "Gesture Module of Window Manager" };
 
-static void *_e_gesture_init(E_Module *m);
+static E_Gesture_Config_Data *_e_gesture_init(E_Module *m);
 static void _e_gesture_init_handlers(void);
 
 
@@ -318,15 +318,58 @@ _e_gesture_event_filter(void *data, void *loop_data EINA_UNUSED, int type, void 
    return e_gesture_process_events(event, type);
 }
 
+static Eina_Bool
+_e_gesture_cb_client_focus_in(void *data, int type, E_Event_Client *ev)
+{
+   E_Client *ec;
+   E_Comp_Wl_Aux_Hint *hint;
+   Eina_List *l;
+   Eina_Bool gesture_disable = EINA_FALSE;
+   int i, j;
+
+   EINA_SAFETY_ON_NULL_RETURN_VAL(ev, ECORE_CALLBACK_PASS_ON);
+   ec = ev->ec;
+   EINA_SAFETY_ON_NULL_RETURN_VAL(ec, ECORE_CALLBACK_PASS_ON);
+   EINA_SAFETY_ON_NULL_RETURN_VAL(ec->comp_data, ECORE_CALLBACK_PASS_ON);
+
+   EINA_LIST_FOREACH(ec->comp_data->aux_hint.hints, l, hint)
+     {
+        if (!strncmp(hint->hint, "wm.policy.win.gesture.disable", sizeof("wm.policy.win.gesture.disable")) &&
+            (atoi(hint->val) == 1))
+          {
+             gesture_disable = EINA_TRUE;
+          }
+     }
+
+   if (gesture_disable && gesture->enable)
+     {
+        GTINF("Disable gesture\n");
+        ecore_event_filter_del(gesture->ef_handler);
+        gesture->ef_handler = NULL;
+        gesture->enable = EINA_FALSE;
+     }
+   else if (!gesture_disable && !gesture->enable)
+     {
+        GTINF("enable gesture\n");
+        gesture->ef_handler = ecore_event_filter_add(NULL, _e_gesture_event_filter, NULL, NULL);
+        gesture->enable = EINA_TRUE;
+     }
+
+   return ECORE_CALLBACK_PASS_ON;
+}
+
 static void
 _e_gesture_init_handlers(void)
 {
    gesture->ef_handler = ecore_event_filter_add(NULL, _e_gesture_event_filter, NULL, NULL);
+
+   gesture->handlers = ecore_event_handler_add(E_EVENT_CLIENT_FOCUS_IN, _e_gesture_cb_client_focus_in, NULL);
 }
 
-static void *
+static E_Gesture_Config_Data *
 _e_gesture_init(E_Module *m)
 {
+   E_Gesture_Config_Data *gconfig = NULL;
    gesture = E_NEW(E_Gesture, 1);
 
    if (!gesture)
@@ -341,8 +384,25 @@ _e_gesture_init(E_Module *m)
         goto err;
      }
 
-   /* Add filtering mechanism */
+   /* Add filtering mechanism 
+    * FIXME: Add handlers after first gesture is grabbed
+    */
    _e_gesture_init_handlers();
+
+   /* Init config */
+   gconfig = E_NEW(E_Gesture_Config_Data, 1);
+   EINA_SAFETY_ON_NULL_GOTO(gconfig, err);
+   gconfig->module = m;
+
+   e_gesture_conf_init(gconfig);
+   EINA_SAFETY_ON_NULL_GOTO(gconfig->conf, err);
+   gesture->config = gconfig;
+
+   GTERR("[jeon] config value\n");
+   GTERR("[jeon] keyboard: %s, time_done: %lf, time_start: %lf\n", gconfig->conf->keyboard_name, gconfig->conf->swipe.time_done, gconfig->conf->swipe.time_start);
+   GTERR("[jeon] area_start: %d, diff_fail: %d, diff_success: %d\n", gconfig->conf->swipe.area_start, gconfig->conf->swipe.diff_fail, gconfig->conf->swipe.diff_success);
+   GTERR("[jeon] combine: %d, back: %d, default: %d\n", gconfig->conf->swipe.combine_key, gconfig->conf->swipe.back_key, gconfig->conf->swipe.default_enable_back);
+
    gesture->global = wl_global_create(e_comp_wl->wl.disp, &tizen_gesture_interface, 1, gesture, _e_gesture_cb_bind);
    if (!gesture->global)
      {
@@ -352,7 +412,7 @@ _e_gesture_init(E_Module *m)
 
    gesture->gesture_filter = E_GESTURE_TYPE_MAX;
 
-   if (E_GESTURE_SWIPE_BACK_DEFAULT_ENABLE)
+   if (gconfig->conf->swipe.default_enable_back)
      {
         gesture->grabbed_gesture |= TIZEN_GESTURE_TYPE_SWIPE;
         gesture->gesture_events.swipes.fingers[1].enabled = EINA_TRUE;
@@ -360,11 +420,14 @@ _e_gesture_init(E_Module *m)
         gesture->gesture_events.swipes.fingers[1].direction[E_GESTURE_DIRECTION_DOWN].res = (void *)0x1;
      }
 
-   e_gesture_device_keydev_set(E_GESTURE_KEYBOARD_DEVICE);
+   e_gesture_device_keydev_set(gesture->config->conf->keyboard_name);
 
-   return m;
+   gesture->enable = EINA_TRUE;
+
+   return gconfig;
 
 err:
+   if (gconfig) e_gesture_conf_deinit(gconfig);
    if (gesture && gesture->ef_handler) ecore_event_filter_del(gesture->ef_handler);
    if (gesture) E_FREE(gesture);
 
@@ -380,6 +443,8 @@ e_modapi_init(E_Module *m)
 E_API int
 e_modapi_shutdown(E_Module *m)
 {
+   E_Gesture_Config_Data *gconfig = m->data;
+   e_gesture_conf_deinit(gconfig);
    e_gesture_device_shutdown();
    return 1;
 }
@@ -388,6 +453,10 @@ E_API int
 e_modapi_save(E_Module *m)
 {
    /* Save something to be kept */
+   E_Gesture_Config_Data *gconfig = m->data;
+   e_config_domain_save("module.gesture",
+                        gconfig->conf_edd,
+                        gconfig->conf);
    return 1;
 }
 
