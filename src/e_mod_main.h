@@ -37,6 +37,8 @@ typedef struct _E_Gesture_Event_Swipe E_Gesture_Event_Swipe;
 typedef struct _E_Gesture_Event_Swipe_Finger E_Gesture_Event_Swipe_Finger;
 typedef struct _E_Gesture_Event_Swipe_Finger_Direction E_Gesture_Event_Swipe_Finger_Direction;
 typedef struct _E_Gesture_Grabbed_Client E_Gesture_Grabbed_Client;
+typedef struct _E_Gesture_Conf_Edd E_Gesture_Conf_Edd;
+typedef struct _E_Gesture_Config_Data E_Gesture_Config_Data;
 
 typedef struct _Coords Coords;
 
@@ -57,6 +59,29 @@ enum _E_Gesture_Direction
 struct _Coords
 {
    int x, y;
+};
+
+struct _E_Gesture_Conf_Edd
+{
+   char *key_device_name;
+   struct
+   {
+      double time_done;
+      double time_begin;
+      int area_offset;
+      int min_length;
+      int max_length;
+      int compose_key;
+      int back_key;
+      Eina_Bool default_enable_back;
+   } swipe;
+};
+
+struct _E_Gesture_Config_Data
+{
+   E_Module *module;
+   E_Config_DD *conf_edd;
+   E_Gesture_Conf_Edd *conf;
 };
 
 struct _E_Gesture_Event_Swipe_Finger_Direction
@@ -106,6 +131,8 @@ struct _E_Gesture_Event
 struct _E_Gesture
 {
    struct wl_global *global;
+   E_Gesture_Config_Data *config;
+   Eina_Bool enable;
 
    Ecore_Event_Filter *ef_handler;
    Eina_List *handlers;
@@ -135,6 +162,10 @@ E_API int   e_modapi_save(E_Module *m);
 
 Eina_Bool e_gesture_process_events(void *event, int type);
 int e_gesture_type_convert(uint32_t type);
+
+/* Config */
+void e_gesture_conf_init(E_Gesture_Config_Data *gconfig);
+void e_gesture_conf_deinit(E_Gesture_Config_Data *gconfig);
 
 /* Device control */
 void e_gesture_device_shutdown(void);
