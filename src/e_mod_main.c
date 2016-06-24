@@ -8,7 +8,7 @@ E_API E_Module_Api e_modapi = { E_MODULE_API_VERSION, "Gesture Module of Window 
 static E_Gesture_Config_Data *_e_gesture_init(E_Module *m);
 static void _e_gesture_init_handlers(void);
 
-
+static Eina_Bool _e_gesture_event_filter(void *data, void *loop_data EINA_UNUSED, int type, void *event);
 static void _e_gesture_wl_client_cb_destroy(struct wl_listener *l, void *data);
 
 static void
@@ -24,9 +24,26 @@ _e_gesture_swipe_set_client_to_list(struct wl_client *client, E_Gesture_Event_Sw
      fingers->direction[E_GESTURE_DIRECTION_RIGHT].client = client;
 }
 
+static void
+_e_gesture_enable(void)
+{
+   GTINF("enable gesture\n");
+   gesture->ef_handler = ecore_event_filter_add(NULL, _e_gesture_event_filter, NULL, NULL);
+   gesture->enable = EINA_TRUE;
+}
+
+static void
+_e_gesture_disable(void)
+{
+   GTINF("Disable gesture\n");
+   ecore_event_filter_del(gesture->ef_handler);
+   gesture->ef_handler = NULL;
+   gesture->enable = EINA_FALSE;
+}
+
 /* Function for registering wl_client destroy listener */
-int
-e_gesture_add_client_destroy_listener(struct wl_client *client, int mode EINA_UNUSED, int num_of_fingers, unsigned int direction)
+static int
+_e_gesture_add_grab_client_destroy_listener(struct wl_client *client, int mode EINA_UNUSED, int num_of_fingers, unsigned int direction)
 {
    struct wl_listener *destroy_listener = NULL;
    Eina_List *l;
@@ -68,7 +85,7 @@ e_gesture_add_client_destroy_listener(struct wl_client *client, int mode EINA_UN
 }
 
 static void
-_e_gesture_remove_client_destroy_listener(struct wl_client *client, unsigned int num_of_fingers, unsigned int direction)
+_e_gesture_remove_grab_client_destroy_listener(struct wl_client *client, unsigned int num_of_fingers, unsigned int direction)
 {
    Eina_List *l, *l_next;
    E_Gesture_Grabbed_Client *data;
@@ -96,6 +113,21 @@ _e_gesture_remove_client_destroy_listener(struct wl_client *client, unsigned int
              E_FREE(data);
           }
      }
+}
+
+static Eina_Bool
+_e_gesture_eclient_list_add(Eina_List **list, E_Client *ec)
+{
+   Eina_List *l;
+   E_Client *data;
+
+   EINA_LIST_FOREACH(*list, l, data)
+     {
+        if (data == ec) return EINA_FALSE;
+     }
+
+   *list = eina_list_append(*list, ec);
+   return EINA_TRUE;
 }
 
 static void
@@ -168,7 +200,7 @@ _e_gesture_cb_grab_swipe(struct wl_client *client,
    if (grabbed_direction)
      tizen_gesture_send_grab_swipe_notify(resource, num_of_fingers, grabbed_direction, TIZEN_GESTURE_ERROR_GRABBED_ALREADY);
 
-   e_gesture_add_client_destroy_listener(client, TIZEN_GESTURE_TYPE_SWIPE, num_of_fingers, direction & ~grabbed_direction);
+   _e_gesture_add_grab_client_destroy_listener(client, TIZEN_GESTURE_TYPE_SWIPE, num_of_fingers, direction & ~grabbed_direction);
    gesture->grabbed_gesture |= TIZEN_GESTURE_TYPE_SWIPE;
    gev->swipes.fingers[num_of_fingers].enabled = EINA_TRUE;
 
@@ -255,7 +287,7 @@ _e_gesture_cb_ungrab_swipe(struct wl_client *client,
 
    if (direction & ~ungrabbed_direction)
      {
-        _e_gesture_remove_client_destroy_listener(client, num_of_fingers, direction & ~ungrabbed_direction);
+        _e_gesture_remove_grab_client_destroy_listener(client, num_of_fingers, direction & ~ungrabbed_direction);
         for (i = 0; i < E_GESTURE_FINGER_MAX+1; i++)
           {
              for (j = 0; j < E_GESTURE_DIRECTION_MAX+1; j++)
@@ -275,9 +307,50 @@ finish:
    return;
 }
 
+static void
+_e_gesture_cb_enable(struct wl_client *client,
+                           struct wl_resource *resouce,
+                           struct wl_resource *surface,
+                           uint32_t enabled)
+{
+   E_Client *ec;
+   Eina_Bool enable_flag, res;
+
+   enable_flag = (Eina_Bool)!!enabled;
+   ec = wl_resource_get_user_data(surface);
+   EINA_SAFETY_ON_NULL_RETURN(ec);
+
+   if (enable_flag)
+     {
+        gesture->disable_client_list = eina_list_remove(gesture->disable_client_list, ec);
+        ec->gesture_disable = EINA_FALSE;
+        if (!gesture->enable && (eina_list_count(gesture->disable_client_list) <= 0))
+          {
+             _e_gesture_enable();
+          }
+     }
+   else
+     {
+        res = _e_gesture_eclient_list_add(&gesture->disable_client_list, ec);
+        ec->gesture_disable = EINA_TRUE;
+        if (res)
+          {
+             if (gesture->enable)
+               {
+                  if (e_client_focused_get() == ec)
+                    {
+                       _e_gesture_disable();
+                    }
+               }
+          }
+     }
+}
+
+
 static const struct tizen_gesture_interface _e_gesture_implementation = {
    _e_gesture_cb_grab_swipe,
-   _e_gesture_cb_ungrab_swipe
+   _e_gesture_cb_ungrab_swipe,
+   _e_gesture_cb_enable
 };
 
 /* tizen_gesture global object destroy function */
@@ -308,8 +381,6 @@ _e_gesture_cb_bind(struct wl_client *client, void *data, uint32_t version, uint3
    wl_resource_set_implementation(resource, &_e_gesture_implementation, gesture_instance, _e_gesture_cb_destory);
 }
 
-
-
 static Eina_Bool
 _e_gesture_event_filter(void *data, void *loop_data EINA_UNUSED, int type, void *event)
 {
@@ -331,16 +402,40 @@ _e_gesture_cb_client_focus_in(void *data, int type, void *event)
 
    if (ec->gesture_disable && gesture->enable)
      {
-        GTINF("Disable gesture\n");
-        ecore_event_filter_del(gesture->ef_handler);
-        gesture->ef_handler = NULL;
-        gesture->enable = EINA_FALSE;
+        _e_gesture_disable();
      }
    else if (!ec->gesture_disable && !gesture->enable)
      {
-        GTINF("enable gesture\n");
-        gesture->ef_handler = ecore_event_filter_add(NULL, _e_gesture_event_filter, NULL, NULL);
-        gesture->enable = EINA_TRUE;
+        _e_gesture_enable();
+     }
+
+   return ECORE_CALLBACK_PASS_ON;
+}
+
+static Eina_Bool
+_e_gesture_cb_client_remove(void *data, int type, void *event)
+{
+   E_Client *ec, *edata;
+   Eina_List *l, *l_next;
+   E_Event_Client *ev = (E_Event_Client *)event;
+
+   EINA_SAFETY_ON_NULL_RETURN_VAL(ev, ECORE_CALLBACK_PASS_ON);
+   ec = ev->ec;
+   EINA_SAFETY_ON_NULL_RETURN_VAL(ec, ECORE_CALLBACK_PASS_ON);
+
+   if (!ec->gesture_disable) return ECORE_CALLBACK_PASS_ON;
+
+   EINA_LIST_FOREACH_SAFE(gesture->disable_client_list, l, l_next, edata)
+     {
+        if (edata == ec)
+          {
+             gesture->disable_client_list = eina_list_remove_list(gesture->disable_client_list, l);
+          }
+     }
+
+   if (!gesture->enable && (eina_list_count(gesture->disable_client_list) <= 0))
+     {
+        _e_gesture_enable();
      }
 
    return ECORE_CALLBACK_PASS_ON;
@@ -354,6 +449,9 @@ _e_gesture_init_handlers(void)
    gesture->handlers = eina_list_append(gesture->handlers,
                                         ecore_event_handler_add(E_EVENT_CLIENT_FOCUS_IN,
                                                                 _e_gesture_cb_client_focus_in, NULL));
+   gesture->handlers = eina_list_append(gesture->handlers,
+                                        ecore_event_handler_add(E_EVENT_CLIENT_REMOVE,
+                                                                _e_gesture_cb_client_remove, NULL));
 }
 
 static E_Gesture_Config_Data *

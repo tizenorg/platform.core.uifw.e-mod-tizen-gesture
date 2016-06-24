@@ -137,6 +137,7 @@ struct _E_Gesture
    Ecore_Event_Filter *ef_handler;
    Eina_List *handlers;
    Eina_List *grab_client_list;
+   Eina_List *disable_client_list;
 
    struct
    {
