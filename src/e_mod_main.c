@@ -322,9 +322,6 @@ static Eina_Bool
 _e_gesture_cb_client_focus_in(void *data, int type, void *event)
 {
    E_Client *ec;
-   E_Comp_Wl_Aux_Hint *hint;
-   Eina_List *l;
-   Eina_Bool gesture_disable = EINA_FALSE;
    E_Event_Client *ev = (E_Event_Client *)event;
 
    EINA_SAFETY_ON_NULL_RETURN_VAL(ev, ECORE_CALLBACK_PASS_ON);
