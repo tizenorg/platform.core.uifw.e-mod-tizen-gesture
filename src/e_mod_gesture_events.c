@@ -303,11 +303,6 @@ _e_gesture_process_mouse_button_down(void *event)
         return EINA_TRUE;
      }
 
-   if (gesture->gesture_events.num_pressed == 1)
-     {
-        gesture->gesture_events.recognized_gesture = 0x0;
-     }
-
    if (gesture->gesture_events.recognized_gesture)
      {
         return EINA_FALSE;
@@ -344,6 +339,10 @@ _e_gesture_process_mouse_button_up(void *event)
 
    if (gesture->gesture_events.recognized_gesture)
      {
+        if (gesture->gesture_events.num_pressed == 0)
+          {
+             gesture->gesture_events.recognized_gesture = 0x0;
+          }
         return EINA_FALSE;
      }
 
