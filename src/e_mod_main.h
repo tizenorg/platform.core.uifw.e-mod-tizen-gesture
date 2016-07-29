@@ -42,19 +42,9 @@ typedef struct _E_Gesture_Config_Data E_Gesture_Config_Data;
 
 typedef struct _Coords Coords;
 
-typedef enum _E_Gesture_Direction E_Gesture_Direction;
-
 extern E_GesturePtr gesture;
 
 #define E_GESTURE_DIRECTION_MAX 4
-enum _E_Gesture_Direction
-{
-   E_GESTURE_DIRECTION_NONE,
-   E_GESTURE_DIRECTION_DOWN, //Start point is North
-   E_GESTURE_DIRECTION_LEFT, // Start point is East
-   E_GESTURE_DIRECTION_UP, // Start point is South
-   E_GESTURE_DIRECTION_RIGHT // Start point is West
-};
 
 struct _Coords
 {
@@ -88,29 +78,28 @@ struct _E_Gesture_Event_Swipe_Finger_Direction
 {
    struct wl_client *client;
    struct wl_resource *res;
+   unsigned int start_point;
+   unsigned int end_point;
 };
 
 struct _E_Gesture_Event_Swipe_Finger
 {
    Coords start;
    Eina_Bool enabled;
-   E_Gesture_Event_Swipe_Finger_Direction direction[E_GESTURE_DIRECTION_MAX+1];
+   Eina_List *direction[E_GESTURE_DIRECTION_MAX+1];
 };
 
 struct _E_Gesture_Grabbed_Client
 {
    struct wl_client *client;
    struct wl_listener *destroy_listener;
-
-   E_Gesture_Event_Swipe_Finger swipe_fingers[E_GESTURE_FINGER_MAX+1];
 };
-
 
 struct _E_Gesture_Event_Swipe
 {
    E_Gesture_Event_Swipe_Finger fingers[E_GESTURE_FINGER_MAX+1];
 
-   E_Gesture_Direction direction;
+   unsigned int direction;
 
    unsigned int combined_keycode;
    unsigned int back_keycode;

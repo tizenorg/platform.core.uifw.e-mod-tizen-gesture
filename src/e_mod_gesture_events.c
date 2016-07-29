@@ -19,7 +19,7 @@ _e_gesture_swipe_cancel(void)
      }
 
    swipes->enabled_finger = 0x0;
-   swipes->direction = E_GESTURE_DIRECTION_NONE;
+   swipes->direction = TIZEN_GESTURE_DIRECTION_NONE;
 
    gesture->gesture_filter |= TIZEN_GESTURE_TYPE_SWIPE;
 }
@@ -66,27 +66,14 @@ _e_gesture_send_back_key(Eina_Bool pressed)
 }
 
 static void
-_e_gesture_send_swipe(int fingers, int x, int y, int direction, struct wl_client *client, struct wl_resource *res)
+_e_gesture_send_swipe(int fingers, int x, int y, int direction)
 {
-   enum tizen_gesture_direction dir = 0;
+   Eina_List *l;
    Ecore_Event_Mouse_Button *ev_cancel;
+   E_Gesture_Event_Swipe_Finger_Direction *ddata;
    E_Gesture_Conf_Edd *conf = gesture->config->conf;
-
-   switch (direction)
-     {
-        case E_GESTURE_DIRECTION_DOWN:
-           dir = TIZEN_GESTURE_DIRECTION_DOWN;
-           break;
-        case E_GESTURE_DIRECTION_LEFT:
-           dir = TIZEN_GESTURE_DIRECTION_LEFT;
-           break;
-        case E_GESTURE_DIRECTION_UP:
-           dir = TIZEN_GESTURE_DIRECTION_UP;
-           break;
-        case E_GESTURE_DIRECTION_RIGHT:
-           dir = TIZEN_GESTURE_DIRECTION_RIGHT;
-           break;
-     }
+   E_Gesture_Event_Swipe *swipes = &gesture->gesture_events.swipes;
+   int base_point = -1;
 
    ev_cancel = E_NEW(Ecore_Event_Mouse_Button, 1);
    EINA_SAFETY_ON_NULL_RETURN(ev_cancel);
@@ -96,18 +83,37 @@ _e_gesture_send_swipe(int fingers, int x, int y, int direction, struct wl_client
 
    ecore_event_add(ECORE_EVENT_MOUSE_BUTTON_CANCEL, ev_cancel, NULL, NULL);
 
-   GTINF("Send swipe gesture (direction: %d) to client: %p\n", dir, client);
+   GTINF("Send swipe gesture (fingers: %d))(direction: %d)\n", fingers, direction);
 
    if (conf->swipe.default_enable_back &&
-       direction == E_GESTURE_DIRECTION_DOWN)
+       direction == TIZEN_GESTURE_DIRECTION_DOWN)
      {
         _e_gesture_send_back_key(EINA_TRUE);
         _e_gesture_send_back_key(EINA_FALSE);
         goto finish;
      }
-   
-   tizen_gesture_send_swipe(res, fingers, TIZEN_GESTURE_MODE_DONE, x, y, dir);
-   _e_gesture_swipe_cancel();
+
+   if (direction == TIZEN_GESTURE_DIRECTION_DOWN ||
+       direction == TIZEN_GESTURE_DIRECTION_UP)
+     {
+        base_point = x;
+     }
+   else if (direction == TIZEN_GESTURE_DIRECTION_RIGHT ||
+            direction == TIZEN_GESTURE_DIRECTION_LEFT)
+     {
+        base_point = y;
+     }
+
+   EINA_LIST_FOREACH(swipes->fingers[fingers].direction[direction], l, ddata)
+     {
+        if (base_point >= ddata->start_point &&
+            base_point <= ddata->end_point)
+          {
+             GTINF("Send swipe gesture (fingers: %d))(direction: %d) to client: %p\n", fingers, direction, wl_resource_get_client(ddata->res));
+             tizen_gesture_send_swipe(ddata->res, TIZEN_GESTURE_MODE_DONE, fingers, x, y, direction);
+             break;
+          }
+     }
 
 finish:
    _e_gesture_swipe_cancel();
@@ -127,6 +133,52 @@ _e_gesture_process_device_del(void *event)
 }
 
 static Eina_Bool
+_e_gesture_event_swipe_direction_check(unsigned int direction)
+{
+   E_Gesture_Event_Swipe *swipes = &gesture->gesture_events.swipes;
+   int idx = gesture->gesture_events.num_pressed;
+   E_Gesture_Conf_Edd *conf = gesture->config->conf;
+   Eina_List *l;
+   E_Gesture_Event_Swipe_Finger_Direction *ddata;
+   Coords coords;
+
+   if ((conf->swipe.default_enable_back) &&
+       (direction == TIZEN_GESTURE_DIRECTION_DOWN  ||
+       ((swipes->combined_keycode == conf->swipe.compose_key) &&
+       (swipes->direction == TIZEN_GESTURE_DIRECTION_RIGHT))))
+     {
+        return EINA_TRUE;
+     }
+
+   coords.x = swipes->fingers[idx].start.x;
+   coords.y = swipes->fingers[idx].start.y;
+
+   EINA_LIST_FOREACH(swipes->fingers[idx].direction[direction], l, ddata)
+     {
+        if (direction == TIZEN_GESTURE_DIRECTION_DOWN ||
+            direction == TIZEN_GESTURE_DIRECTION_UP)
+          {
+             if (coords.x >= ddata->start_point &&
+                 coords.x <= ddata->end_point)
+               {
+                  return EINA_TRUE;
+               }
+          }
+        else if (direction == TIZEN_GESTURE_DIRECTION_RIGHT ||
+                 direction == TIZEN_GESTURE_DIRECTION_LEFT)
+          {
+             if (coords.y >= ddata->start_point &&
+                 coords.y <= ddata->end_point)
+               {
+                  return EINA_TRUE;
+               }
+          }
+     }
+
+   return EINA_FALSE;
+}
+
+static Eina_Bool
 _e_gesture_timer_swipe_start(void *data)
 {
    E_Gesture_Event_Swipe *swipes = &gesture->gesture_events.swipes;
@@ -135,17 +187,19 @@ _e_gesture_timer_swipe_start(void *data)
 
    GTDBG("Swipe start timer is expired. Currently alived swipe fingers: 0x%x\n", swipes->enabled_finger);
 
+   ecore_timer_del(swipes->start_timer);
+   swipes->start_timer = NULL;
+
    for (i = E_GESTURE_FINGER_MAX; i > idx; i--)
      {
         swipes->enabled_finger &= ~(1 << i);
      }
-   if ((swipes->direction == E_GESTURE_DIRECTION_DOWN && !swipes->fingers[idx].direction[E_GESTURE_DIRECTION_DOWN].client) ||
-       (swipes->direction == E_GESTURE_DIRECTION_LEFT && !swipes->fingers[idx].direction[E_GESTURE_DIRECTION_LEFT].client) ||
-       (swipes->direction == E_GESTURE_DIRECTION_UP && !swipes->fingers[idx].direction[E_GESTURE_DIRECTION_UP].client) ||
-       (swipes->direction == E_GESTURE_DIRECTION_RIGHT && !swipes->fingers[idx].direction[E_GESTURE_DIRECTION_RIGHT].client))
+   if (swipes->enabled_finger == 0x0 ||
+       _e_gesture_event_swipe_direction_check(swipes->direction) == EINA_FALSE)
      {
         _e_gesture_swipe_cancel();
      }
+
    return ECORE_CALLBACK_CANCEL;
 }
 
@@ -155,6 +209,9 @@ _e_gesture_timer_swipe_done(void *data)
    E_Gesture_Event_Swipe *swipes = &gesture->gesture_events.swipes;
 
    GTDBG("Swipe done timer is expired. Currently alived swipe fingers: 0x%x\n", swipes->enabled_finger);
+
+   ecore_timer_del(swipes->done_timer);
+   swipes->done_timer = NULL;
 
    _e_gesture_swipe_cancel();
 
@@ -180,16 +237,16 @@ _e_gesture_process_swipe_down(Ecore_Event_Mouse_Button *ev)
           }
 
         if (ev->y < conf->swipe.area_offset)
-          swipes->direction = E_GESTURE_DIRECTION_DOWN;
+          swipes->direction = TIZEN_GESTURE_DIRECTION_DOWN;
         else if (ev->y > e_comp->h - conf->swipe.area_offset)
-          swipes->direction = E_GESTURE_DIRECTION_UP;
+          swipes->direction = TIZEN_GESTURE_DIRECTION_UP;
         else if (ev->x < conf->swipe.area_offset)
-          swipes->direction = E_GESTURE_DIRECTION_RIGHT;
+          swipes->direction = TIZEN_GESTURE_DIRECTION_RIGHT;
         else if (ev->x > e_comp->w - conf->swipe.area_offset)
-          swipes->direction = E_GESTURE_DIRECTION_LEFT;
+          swipes->direction = TIZEN_GESTURE_DIRECTION_LEFT;
 
-        if (swipes->direction != E_GESTURE_DIRECTION_DOWN &&
-       !((swipes->combined_keycode == conf->swipe.compose_key) && swipes->direction == E_GESTURE_DIRECTION_RIGHT))
+        if (conf->swipe.default_enable_back && (swipes->direction != TIZEN_GESTURE_DIRECTION_DOWN &&
+       !((swipes->combined_keycode == conf->swipe.compose_key) && swipes->direction == TIZEN_GESTURE_DIRECTION_RIGHT)))
           {
              _e_gesture_swipe_cancel();
           }
@@ -227,7 +284,7 @@ _e_gesture_process_swipe_move(Ecore_Event_Mouse_Move *ev)
 
    switch(swipes->direction)
      {
-        case E_GESTURE_DIRECTION_DOWN:
+        case TIZEN_GESTURE_DIRECTION_DOWN:
            if (diff.x > conf->swipe.min_length)
              {
                 _e_gesture_swipe_cancel();
@@ -235,10 +292,10 @@ _e_gesture_process_swipe_move(Ecore_Event_Mouse_Move *ev)
              }
            if (diff.y > conf->swipe.max_length)
              {
-                _e_gesture_send_swipe(idx, swipes->fingers[idx].start.x, swipes->fingers[idx].start.y, swipes->direction, swipes->fingers[idx].direction[E_GESTURE_DIRECTION_DOWN].client, swipes->fingers[idx].direction[E_GESTURE_DIRECTION_DOWN].res);
+                _e_gesture_send_swipe(idx, swipes->fingers[idx].start.x, swipes->fingers[idx].start.y, swipes->direction);
              }
            break;
-        case E_GESTURE_DIRECTION_LEFT:
+        case TIZEN_GESTURE_DIRECTION_LEFT:
            if (diff.y > conf->swipe.min_length)
              {
                 _e_gesture_swipe_cancel();
@@ -246,10 +303,10 @@ _e_gesture_process_swipe_move(Ecore_Event_Mouse_Move *ev)
              }
            if (diff.x > conf->swipe.max_length)
              {
-                _e_gesture_send_swipe(idx, swipes->fingers[idx].start.x, swipes->fingers[idx].start.y, swipes->direction, swipes->fingers[idx].direction[E_GESTURE_DIRECTION_LEFT].client, swipes->fingers[idx].direction[E_GESTURE_DIRECTION_LEFT].res);
+                _e_gesture_send_swipe(idx, swipes->fingers[idx].start.x, swipes->fingers[idx].start.y, swipes->direction);
              }
            break;
-        case E_GESTURE_DIRECTION_UP:
+        case TIZEN_GESTURE_DIRECTION_UP:
            if (diff.x > conf->swipe.min_length)
              {
                 _e_gesture_swipe_cancel();
@@ -257,10 +314,10 @@ _e_gesture_process_swipe_move(Ecore_Event_Mouse_Move *ev)
              }
            if (diff.y > conf->swipe.max_length)
              {
-                _e_gesture_send_swipe(idx, swipes->fingers[idx].start.x, swipes->fingers[idx].start.y, swipes->direction, swipes->fingers[idx].direction[E_GESTURE_DIRECTION_UP].client, swipes->fingers[idx].direction[E_GESTURE_DIRECTION_UP].res);
+                _e_gesture_send_swipe(idx, swipes->fingers[idx].start.x, swipes->fingers[idx].start.y, swipes->direction);
              }
            break;
-        case E_GESTURE_DIRECTION_RIGHT:
+        case TIZEN_GESTURE_DIRECTION_RIGHT:
            if (diff.y > conf->swipe.min_length)
              {
                 _e_gesture_swipe_cancel();
@@ -268,7 +325,7 @@ _e_gesture_process_swipe_move(Ecore_Event_Mouse_Move *ev)
              }
            if (diff.x > conf->swipe.max_length)
              {
-                _e_gesture_send_swipe(idx, swipes->fingers[idx].start.x, swipes->fingers[idx].start.y, swipes->direction, swipes->fingers[idx].direction[E_GESTURE_DIRECTION_RIGHT].client, swipes->fingers[idx].direction[E_GESTURE_DIRECTION_RIGHT].res);
+                _e_gesture_send_swipe(idx, swipes->fingers[idx].start.x, swipes->fingers[idx].start.y, swipes->direction);
              }
            break;
         default:

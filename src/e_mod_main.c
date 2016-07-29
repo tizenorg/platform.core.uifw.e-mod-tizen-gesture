@@ -11,17 +11,43 @@ static void _e_gesture_init_handlers(void);
 static Eina_Bool _e_gesture_event_filter(void *data, void *loop_data EINA_UNUSED, int type, void *event);
 static void _e_gesture_wl_client_cb_destroy(struct wl_listener *l, void *data);
 
-static void
-_e_gesture_swipe_set_client_to_list(struct wl_client *client, E_Gesture_Event_Swipe_Finger *fingers, unsigned int direction)
+static Eina_Bool
+_e_gesture_swipe_boundary_check(E_Gesture_Event_Swipe_Finger *fingers, unsigned int direction, unsigned int start_point, unsigned int end_point)
 {
-   if (direction & TIZEN_GESTURE_DIRECTION_DOWN)
-     fingers->direction[E_GESTURE_DIRECTION_DOWN].client = client;
-   if (direction & TIZEN_GESTURE_DIRECTION_LEFT)
-     fingers->direction[E_GESTURE_DIRECTION_LEFT].client = client;
-   if (direction & TIZEN_GESTURE_DIRECTION_UP)
-     fingers->direction[E_GESTURE_DIRECTION_UP].client = client;
-   if (direction & TIZEN_GESTURE_DIRECTION_RIGHT)
-     fingers->direction[E_GESTURE_DIRECTION_RIGHT].client = client;
+   Eina_List *l;
+   E_Gesture_Event_Swipe_Finger_Direction *ddata;
+   E_Gesture_Conf_Edd *conf = gesture->config->conf;
+
+   if ((conf->swipe.default_enable_back) &&
+       (direction == TIZEN_GESTURE_DIRECTION_DOWN ||
+       direction == TIZEN_GESTURE_DIRECTION_UP))
+     {
+        return EINA_FALSE;
+     }
+
+   EINA_LIST_FOREACH(fingers->direction[direction], l, ddata)
+     {
+        if (!(start_point > ddata->end_point || end_point < ddata->start_point))
+          return EINA_FALSE;
+     }
+
+   return EINA_TRUE;
+}
+
+static void
+_e_gesture_swipe_grab_add(E_Gesture_Event_Swipe_Finger *fingers, struct wl_client *client, struct wl_resource *res, unsigned int direction, unsigned int start_point, unsigned int end_point)
+{
+   E_Gesture_Event_Swipe_Finger_Direction *ddata;
+
+   ddata = E_NEW(E_Gesture_Event_Swipe_Finger_Direction, 1);
+   EINA_SAFETY_ON_NULL_RETURN(ddata);
+
+   ddata->client = client;
+   ddata->res = res;
+   ddata->start_point = start_point;
+   ddata->end_point = end_point;
+
+   fingers->direction[direction] = eina_list_append(fingers->direction[direction], ddata);
 }
 
 static void
@@ -43,18 +69,16 @@ _e_gesture_disable(void)
 
 /* Function for registering wl_client destroy listener */
 static int
-_e_gesture_add_grab_client_destroy_listener(struct wl_client *client, int mode EINA_UNUSED, int num_of_fingers, unsigned int direction)
+_e_gesture_add_grab_client_destroy_listener(struct wl_client *client)
 {
    struct wl_listener *destroy_listener = NULL;
    Eina_List *l;
-   E_Gesture_Grabbed_Client *grabbed_client, *data;
+   struct wl_client *cdata;
 
-   EINA_LIST_FOREACH(gesture->grab_client_list, l, data)
+   EINA_LIST_FOREACH(gesture->grab_client_list, l, cdata)
      {
-        if (data->client == client)
+        if (cdata == client)
           {
-             _e_gesture_swipe_set_client_to_list(client, &data->swipe_fingers[num_of_fingers], direction);
-
              return TIZEN_GESTURE_ERROR_NONE;
           }
      }
@@ -66,51 +90,29 @@ _e_gesture_add_grab_client_destroy_listener(struct wl_client *client, int mode E
         return TIZEN_GESTURE_ERROR_NO_SYSTEM_RESOURCES;
      }
 
-   grabbed_client = E_NEW(E_Gesture_Grabbed_Client, 1);
-   if (!grabbed_client)
-     {
-        GTERR("Failed to allocate memory to save client information !\n");
-        return TIZEN_GESTURE_ERROR_NO_SYSTEM_RESOURCES;
-     }
-
    destroy_listener->notify = _e_gesture_wl_client_cb_destroy;
    wl_client_add_destroy_listener(client, destroy_listener);
-   grabbed_client->client = client;
-   grabbed_client->destroy_listener = destroy_listener;
-   _e_gesture_swipe_set_client_to_list(client, &grabbed_client->swipe_fingers[num_of_fingers], direction);
 
-   gesture->grab_client_list = eina_list_append(gesture->grab_client_list, grabbed_client);
+   gesture->grab_client_list = eina_list_append(gesture->grab_client_list, client);
 
    return TIZEN_KEYROUTER_ERROR_NONE;
 }
 
 static void
-_e_gesture_remove_grab_client_destroy_listener(struct wl_client *client, unsigned int num_of_fingers, unsigned int direction)
+_e_gesture_remove_grab_client_destroy_listener(struct wl_client *client)
 {
    Eina_List *l, *l_next;
-   E_Gesture_Grabbed_Client *data;
-   int i;
+   struct wl_client *cdata;
+   struct wl_listener *destroy_listener;
 
-   EINA_LIST_FOREACH_SAFE(gesture->grab_client_list, l, l_next, data)
+   EINA_LIST_FOREACH_SAFE(gesture->grab_client_list, l, l_next, cdata)
      {
-        if (data->client == client)
+        if (cdata == client)
           {
-             _e_gesture_swipe_set_client_to_list(NULL, &data->swipe_fingers[num_of_fingers], direction);
-
-             for (i = 0; i < E_GESTURE_FINGER_MAX+1; i++)
-               {
-                  if (data->swipe_fingers[i].direction[E_GESTURE_DIRECTION_DOWN].client ||
-                      data->swipe_fingers[i].direction[E_GESTURE_DIRECTION_LEFT].client ||
-                      data->swipe_fingers[i].direction[E_GESTURE_DIRECTION_UP].client ||
-                      data->swipe_fingers[i].direction[E_GESTURE_DIRECTION_RIGHT].client)
-                    {
-                       return;
-                    }
-               }
-             wl_list_remove(&data->destroy_listener->link);
-             E_FREE(data->destroy_listener);
-             gesture->grab_client_list = eina_list_remove(gesture->grab_client_list, data);
-             E_FREE(data);
+             destroy_listener = wl_client_get_destroy_listener(client, _e_gesture_wl_client_cb_destroy);
+             wl_list_remove(&destroy_listener->link);
+             E_FREE(destroy_listener);
+             gesture->grab_client_list = eina_list_remove_list(gesture->grab_client_list, l);
           }
      }
 }
@@ -133,95 +135,180 @@ _e_gesture_eclient_list_add(Eina_List **list, E_Client *ec)
 static void
 _e_gesture_cb_grab_swipe(struct wl_client *client,
                    struct wl_resource *resource,
-                   uint32_t num_of_fingers, uint32_t direction)
+                   uint32_t num_of_fingers, uint32_t direction,
+                   uint32_t start_point, uint32_t end_point)
 {
    E_Gesture_Event *gev;
    unsigned int grabbed_direction = 0x0;
+   Eina_Bool res = EINA_FALSE;
+   unsigned int ret = TIZEN_GESTURE_ERROR_NONE;
 
-   GTINF("client %p is request grab gesture, fingers: %d, direction: 0x%x\n", client, num_of_fingers, direction);
+   GTINF("client %p is request grab gesture, fingers: %d, direction: 0x%x (%d ~ %d)\n", client, num_of_fingers, direction, start_point, end_point);
    if (num_of_fingers > E_GESTURE_FINGER_MAX)
      {
         GTWRN("Do not support %d fingers (max: %d)\n", num_of_fingers, E_GESTURE_FINGER_MAX);
-        tizen_gesture_send_grab_swipe_notify(resource, num_of_fingers, direction, TIZEN_GESTURE_ERROR_INVALID_DATA);
-        goto out;
+        ret = TIZEN_GESTURE_ERROR_INVALID_DATA;
+        goto finish;
      }
 
    gev = &gesture->gesture_events;
 
-   if (direction & TIZEN_GESTURE_DIRECTION_DOWN)
+   res = _e_gesture_swipe_boundary_check(&gev->swipes.fingers[num_of_fingers], direction, start_point, end_point);
+
+   if (res)
      {
-        if (gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_DOWN].client)
-           {
-              grabbed_direction |= TIZEN_GESTURE_DIRECTION_DOWN;
-           }
-        else
-           {
-              gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_DOWN].client = client;
-              gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_DOWN].res = resource;
-           }
+        _e_gesture_swipe_grab_add(&gev->swipes.fingers[num_of_fingers], client, resource, direction, start_point, end_point);
+
+        _e_gesture_add_grab_client_destroy_listener(client);
+        gesture->grabbed_gesture |= TIZEN_GESTURE_TYPE_SWIPE;
+        gev->swipes.fingers[num_of_fingers].enabled = EINA_TRUE;
+
+        ret = TIZEN_GESTURE_ERROR_NONE;
      }
-   if (direction & TIZEN_GESTURE_DIRECTION_LEFT)
+   else
      {
-        if (gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_LEFT].client)
-           {
-              grabbed_direction |= TIZEN_GESTURE_DIRECTION_LEFT;
-           }
-        else
-           {
-              gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_LEFT].client = client;
-              gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_LEFT].res = resource;
-           }
-     }
-   if (direction & TIZEN_GESTURE_DIRECTION_UP)
-     {
-        if (gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_UP].client)
-           {
-              grabbed_direction |= TIZEN_GESTURE_DIRECTION_UP;
-           }
-        else
-           {
-              gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_UP].client = client;
-              gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_UP].res = resource;
-           }
-     }
-   if (direction & TIZEN_GESTURE_DIRECTION_RIGHT)
-     {
-        if (gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_RIGHT].client)
-           {
-              grabbed_direction |= TIZEN_GESTURE_DIRECTION_RIGHT;
-           }
-        else
-           {
-              gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_RIGHT].client = client;
-              gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_RIGHT].res = resource;
-           }
+        ret = TIZEN_GESTURE_ERROR_GRABBED_ALREADY;
      }
 
-   if (grabbed_direction)
-     tizen_gesture_send_grab_swipe_notify(resource, num_of_fingers, grabbed_direction, TIZEN_GESTURE_ERROR_GRABBED_ALREADY);
-
-   _e_gesture_add_grab_client_destroy_listener(client, TIZEN_GESTURE_TYPE_SWIPE, num_of_fingers, direction & ~grabbed_direction);
-   gesture->grabbed_gesture |= TIZEN_GESTURE_TYPE_SWIPE;
-   gev->swipes.fingers[num_of_fingers].enabled = EINA_TRUE;
-
-   if (!grabbed_direction)
-     tizen_gesture_send_grab_swipe_notify(resource, num_of_fingers, direction, TIZEN_GESTURE_ERROR_NONE);
-
-out:
-   return;
+finish:
+   tizen_gesture_send_grab_swipe_notify(resource, num_of_fingers, grabbed_direction, ret);
 }
+
+static Eina_Bool
+_e_gesture_grabbed_client_check(struct wl_client *client)
+{
+   E_Gesture_Event *gev;
+   int i, j;
+   Eina_List *l;
+   E_Gesture_Event_Swipe_Finger_Direction *ddata;
+
+   gev = &gesture->gesture_events;
+   if (gesture->grabbed_gesture & TIZEN_GESTURE_TYPE_SWIPE)
+     {
+        for (i = 0; i < E_GESTURE_FINGER_MAX + 1; i++)
+          {
+             if (gev->swipes.fingers[i].enabled == EINA_TRUE)
+               {
+                  for (j = 0; j < E_GESTURE_DIRECTION_MAX + 1; j++)
+                    {
+                       EINA_LIST_FOREACH(gev->swipes.fingers[i].direction[j], l, ddata)
+                         {
+                            if (ddata->client == client) return EINA_TRUE;
+                         }
+                    }
+               }
+          }
+     }
+
+   return EINA_FALSE;
+}
+
+static void
+_e_gesture_state_cleanup(void)
+{
+   E_Gesture_Event *gev;
+   int i, j;
+   Eina_Bool flag_direction = EINA_FALSE;
+   unsigned int cout_enabled = 0;
+
+   gev = &gesture->gesture_events;
+   if (gesture->grabbed_gesture & TIZEN_GESTURE_TYPE_SWIPE)
+     {
+        for (i = 0; i < E_GESTURE_FINGER_MAX + 1; i++)
+          {
+             flag_direction = EINA_FALSE;
+             if (gev->swipes.fingers[i].enabled == EINA_TRUE)
+               {
+                  for (j = 0; j < E_GESTURE_DIRECTION_MAX + 1; j++)
+                    {
+                       if (eina_list_count(gev->swipes.fingers[i].direction[j]) != 0)
+                         {
+                            flag_direction = EINA_TRUE;
+                            break;
+                         }
+                    }
+                  if (flag_direction == EINA_FALSE)
+                    {
+                       gev->swipes.fingers[i].enabled = EINA_FALSE;
+                       cout_enabled++;
+                    }
+               }
+             else
+               {
+                  cout_enabled++;
+               }
+          }
+        if (cout_enabled == E_GESTURE_FINGER_MAX + 1)
+          {
+             gesture->grabbed_gesture &= ~TIZEN_GESTURE_TYPE_SWIPE;
+          }
+     }
+}
+
+static void
+_e_gesture_client_remove(struct wl_client *client)
+{
+   E_Gesture_Event *gev;
+   int i, j;
+   Eina_List *l, *l_next;
+   E_Gesture_Event_Swipe_Finger_Direction *ddata;
+   Eina_Bool flag_direction = EINA_FALSE;
+   unsigned int cout_enabled = 0;
+
+   gev = &gesture->gesture_events;
+   if (gesture->grabbed_gesture & TIZEN_GESTURE_TYPE_SWIPE)
+     {
+        for (i = 0; i < E_GESTURE_FINGER_MAX + 1; i++)
+          {
+             flag_direction = EINA_FALSE;
+             if (gev->swipes.fingers[i].enabled == EINA_TRUE)
+               {
+                  for (j = 0; j < E_GESTURE_DIRECTION_MAX + 1; j++)
+                    {
+                       if (eina_list_count(gev->swipes.fingers[i].direction[j]) != 0)
+                         {
+                            flag_direction = EINA_TRUE;
+                            EINA_LIST_FOREACH_SAFE(gev->swipes.fingers[i].direction[j], l, l_next, ddata)
+                              {
+                                 if (ddata->client == client)
+                                   {
+                                      E_FREE(ddata);
+                                      gev->swipes.fingers[i].direction[j] = eina_list_remove_list(gev->swipes.fingers[i].direction[j], l);
+                                   }
+                              }
+                         }
+                    }
+                  if (flag_direction == EINA_FALSE)
+                    {
+                       gev->swipes.fingers[i].enabled = EINA_FALSE;
+                       cout_enabled++;
+                    }
+               }
+             else
+               {
+                  cout_enabled++;
+               }
+          }
+        if (cout_enabled == E_GESTURE_FINGER_MAX + 1)
+          {
+             gesture->grabbed_gesture &= ~TIZEN_GESTURE_TYPE_SWIPE;
+          }
+     }
+}
+
 
 static void
 _e_gesture_cb_ungrab_swipe(struct wl_client *client,
                            struct wl_resource *resouce,
                            uint32_t num_of_fingers, uint32_t direction)
 {
-   int i, j;
    E_Gesture_Event *gev;
-   unsigned int ungrabbed_direction = 0x0;
    int ret = TIZEN_GESTURE_ERROR_NONE;
+   Eina_List *l, *l_next;
+   E_Gesture_Event_Swipe_Finger_Direction *ddata;
+   Eina_Bool flag_removed = EINA_FALSE, res = EINA_FALSE;
 
-   GTINF("client %p is request ungrab swipe gesture, fingers: %d, direction: 0x%x, client: %p\n", client, num_of_fingers, direction, gesture->gesture_events.swipes.fingers[0].direction[3].client);
+   GTINF("client %p is request ungrab swipe gesture, fingers: %d, direction: 0x%x\n", client, num_of_fingers, direction);
 
    if (num_of_fingers > E_GESTURE_FINGER_MAX)
      {
@@ -232,75 +319,27 @@ _e_gesture_cb_ungrab_swipe(struct wl_client *client,
 
    gev = &gesture->gesture_events;
 
-   if (direction & TIZEN_GESTURE_DIRECTION_DOWN)
+   EINA_LIST_FOREACH_SAFE(gev->swipes.fingers[num_of_fingers].direction[direction], l, l_next, ddata)
      {
-        if ((gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_DOWN].client) &&
-            (gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_DOWN].client == client))
-           {
-              gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_DOWN].client = NULL;
-              gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_DOWN].res = NULL;
-           }
-        else
-           {
-              ungrabbed_direction |= TIZEN_GESTURE_DIRECTION_DOWN;
-           }
-     }
-   if (direction & TIZEN_GESTURE_DIRECTION_LEFT)
-     {
-        if ((gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_LEFT].client) &&
-            (gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_LEFT].client == client))
-           {
-              gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_LEFT].client = NULL;
-              gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_LEFT].res = NULL;
-           }
-        else
-           {
-              ungrabbed_direction |= TIZEN_GESTURE_DIRECTION_LEFT;
-           }
-     }
-   if (direction & TIZEN_GESTURE_DIRECTION_UP)
-     {
-        if ((gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_UP].client) &&
-            (gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_UP].client == client))
-           {
-              gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_UP].client = NULL;
-              gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_UP].res = NULL;
-           }
-        else
-           {
-              ungrabbed_direction |= TIZEN_GESTURE_DIRECTION_UP;
-           }
-     }
-   if (direction & TIZEN_GESTURE_DIRECTION_RIGHT)
-     {
-        if ((gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_RIGHT].client) &&
-            (gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_RIGHT].client == client))
-           {
-              gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_RIGHT].client = NULL;
-              gev->swipes.fingers[num_of_fingers].direction[E_GESTURE_DIRECTION_RIGHT].res = NULL;
-           }
-        else
-           {
-              ungrabbed_direction |= TIZEN_GESTURE_DIRECTION_RIGHT;
-           }
+        if (ddata->client == client)
+          {
+             E_FREE(ddata);
+             gev->swipes.fingers[num_of_fingers].direction[direction] = eina_list_remove_list(
+                gev->swipes.fingers[num_of_fingers].direction[direction], l);
+             flag_removed = EINA_TRUE;
+          }
      }
 
-   if (direction & ~ungrabbed_direction)
+   if (flag_removed)
      {
-        _e_gesture_remove_grab_client_destroy_listener(client, num_of_fingers, direction & ~ungrabbed_direction);
-        for (i = 0; i < E_GESTURE_FINGER_MAX+1; i++)
+        res = _e_gesture_grabbed_client_check(client);
+        if (res == EINA_FALSE)
           {
-             for (j = 0; j < E_GESTURE_DIRECTION_MAX+1; j++)
-               {
-                  if (gev->swipes.fingers[i].direction[j].client)
-                    {
-                       goto finish;
-                    }
-               }
-             gev->swipes.fingers[i].enabled = EINA_FALSE;
+             _e_gesture_remove_grab_client_destroy_listener(client);
           }
-        gesture->grabbed_gesture &= ~TIZEN_GESTURE_TYPE_SWIPE;
      }
+
+   _e_gesture_state_cleanup();
 
 finish:
    tizen_gesture_send_grab_swipe_notify(resouce, num_of_fingers, direction, ret);
@@ -504,8 +543,6 @@ _e_gesture_init(E_Module *m)
      {
         gesture->grabbed_gesture |= TIZEN_GESTURE_TYPE_SWIPE;
         gesture->gesture_events.swipes.fingers[1].enabled = EINA_TRUE;
-        gesture->gesture_events.swipes.fingers[1].direction[E_GESTURE_DIRECTION_DOWN].client = (void *)0x1;
-        gesture->gesture_events.swipes.fingers[1].direction[E_GESTURE_DIRECTION_DOWN].res = (void *)0x1;
      }
 
    e_gesture_device_keydev_set(gesture->config->conf->key_device_name);
@@ -552,47 +589,7 @@ static void
 _e_gesture_wl_client_cb_destroy(struct wl_listener *l, void *data)
 {
    struct wl_client *client = data;
-   int i, j;
-   Eina_List *l_list, *l_next;
-   E_Gesture_Grabbed_Client *client_data;
 
-   if (gesture->grabbed_gesture & TIZEN_GESTURE_TYPE_SWIPE)
-     {
-        for (i = 0; i < E_GESTURE_FINGER_MAX+1; i++)
-          {
-             for (j = 0; j < E_GESTURE_DIRECTION_MAX+1; j++)
-               {
-                  if (gesture->gesture_events.swipes.fingers[i].direction[j].client == client)
-                    {
-                       gesture->gesture_events.swipes.fingers[i].direction[j].client = NULL;
-                       gesture->gesture_events.swipes.fingers[i].direction[j].res = NULL;
-                    }
-               }
-          }
-
-        for (i = 0; i < E_GESTURE_FINGER_MAX+1; i++)
-          {
-             for (j = 0; j < E_GESTURE_DIRECTION_MAX+1; j++)
-               {
-                  if (gesture->gesture_events.swipes.fingers[i].direction[j].client)
-                    {
-                       goto out;
-                    }
-               }
-             gesture->gesture_events.swipes.fingers[i].enabled = EINA_FALSE;
-          }
-        gesture->grabbed_gesture &= ~TIZEN_GESTURE_TYPE_SWIPE;
-     }
-
-out:
-   E_FREE(l);
-   l = NULL;
-   EINA_LIST_FOREACH_SAFE(gesture->grab_client_list, l_list, l_next, client_data)
-     {
-        if (client_data->client == client)
-          {
-             gesture->grab_client_list = eina_list_remove(gesture->grab_client_list, client_data);
-             E_FREE(client_data);
-          }
-     }
+   _e_gesture_client_remove(client);
+  _e_gesture_remove_grab_client_destroy_listener(client);
 }
